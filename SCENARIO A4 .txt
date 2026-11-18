@@ -1,0 +1,369 @@
+ MongoDB Replica Set – Banking App
+
+Task 1: Start the nodes and initiate the replica set
+
+Open 3 separate Command Prompt / PowerShell windows.
+
+Terminal 1 – Node 1
+
+bash
+
+```bash
+mkdir C:\data\rs0-1
+mongod --replSet rs0 --port 27017 --dbpath C:\data\rs0-1 --bind_ip localhost
+```
+
+Terminal 2 – Node 2
+
+bash
+
+```bash
+mkdir C:\data\rs0-2
+mongod --replSet rs0 --port 27018 --dbpath C:\data\rs0-2 --bind_ip localhost
+```
+
+Terminal 3 – Node 3
+
+bash
+
+```bash
+mkdir C:\data\rs0-3
+mongod --replSet rs0 --port 27019 --dbpath C:\data\rs0-3 --bind_ip localhost
+```
+
+Open a fourth terminal and connect:
+
+bash
+
+```bash
+mongosh --port 27017
+```
+
+Initiate the replica set:
+
+javascript
+
+```javascript
+rs.initiate({
+  _id: "rs0",
+  members: [
+    { _id: 0, host: "localhost:27017" },
+    { _id: 1, host: "localhost:27018" },
+    { _id: 2, host: "localhost:27019" }
+  ]
+})
+```
+
+Check the replica set:
+
+javascript
+
+```javascript
+rs.status()
+```
+
+Expected output:
+
+javascript
+
+```javascript
+{
+  ok: 1
+}
+```
+
+After a few seconds, the prompt should show:
+
+text
+
+text
+rs0 [direct: primary] test>
+
+
+Task 2: Identify primary and secondary members
+
+javascript
+
+```javascript
+rs.status().members.forEach(m => {
+  printjson({
+    name: m.name,
+    state: m.stateStr,
+    health: m.health
+  })
+})
+```
+
+Expected output:
+
+javascript
+
+```javascript
+{
+  name: 'localhost:27017',
+  state: 'PRIMARY',
+  health: 1
+}
+{
+  name: 'localhost:27018',
+  state: 'SECONDARY',
+  health: 1
+}
+{
+  name: 'localhost:27019',
+  state: 'SECONDARY',
+  health: 1
+}
+```
+
+Task 3: Write with write concern
+
+Select the database:
+
+javascript
+
+```javascript
+use bankDB
+```
+
+Insert an account document with majority write concern:
+
+javascript
+
+```javascript
+db.accounts.insertOne(
+  {
+    accNo: 1001,
+    holder: "Kumar",
+    balance: 5000
+  },
+  {
+    writeConcern: {
+      w: "majority",
+      j: true,
+      wtimeout: 5000
+    }
+  }
+)
+```
+
+Expected output:
+
+javascript
+
+```javascript
+{
+  acknowledged: true,
+  insertedId: ObjectId('...')
+}
+```
+
+This confirms that the write was acknowledged by a majority of replica set members.
+
+Task 4: Read preference
+
+Set read preference to `secondaryPreferred`:
+
+javascript
+
+```javascript
+db.getMongo().setReadPref("secondaryPreferred")
+```
+
+Read the account:
+
+javascript
+
+```javascript
+db.accounts.findOne({ accNo: 1001 })
+```
+
+Expected output:
+
+javascript
+
+```javascript
+{
+  _id: ObjectId('...'),
+  accNo: 1001,
+  holder: 'Kumar',
+  balance: 5000
+}
+```
+
+Check the current read preference:
+
+javascript
+
+```javascript
+db.getMongo().getReadPrefMode()
+```
+
+Expected output:
+
+text
+
+```text
+secondaryPreferred
+```
+
+Task 5: Inspect the oplog
+
+Access the local database:
+
+javascript
+
+```javascript
+use local
+```
+
+Find the latest insert operation:
+
+javascript
+
+```javascript
+db.getCollection("oplog.rs").find(
+  {
+    ns: "bankDB.accounts",
+    op: "i"
+  }
+).sort({ $natural: -1 }).limit(1).pretty()
+```
+
+Expected output:
+
+javascript
+
+```javascript
+{
+  op: 'i',
+  ns: 'bankDB.accounts',
+  o: {
+    _id: ObjectId('...'),
+    accNo: 1001,
+    holder: 'Kumar',
+    balance: 5000
+  },
+  ts: Timestamp({ t: ..., i: 1 }),
+  ...
+}
+```
+
+Task 6: Force the primary to step down
+
+Connect to the current primary:
+
+bash
+
+```bash
+mongosh --port 27017
+```
+
+Run:
+
+javascript
+
+```javascript
+rs.stepDown(60)
+```
+
+The current primary steps down for 60 seconds, allowing another eligible member to become primary.
+
+Reconnect:
+
+bash
+
+```bash
+mongosh --port 27018
+```
+
+Check the replica set:
+
+javascript
+
+```javascript
+rs.status().members.forEach(m => {
+  printjson({
+    name: m.name,
+    state: m.stateStr,
+    health: m.health
+  })
+})
+```
+
+Expected output (example):
+
+javascript
+
+```javascript
+{
+  name: 'localhost:27017',
+  state: 'SECONDARY',
+  health: 1
+}
+{
+  name: 'localhost:27018',
+  state: 'PRIMARY',
+  health: 1
+}
+{
+  name: 'localhost:27019',
+  state: 'SECONDARY',
+  health: 1
+}
+```
+
+
+Task 7: Check replication health and replication lag
+
+Check replica set status:
+
+javascript
+
+```javascript
+rs.status()
+```
+
+Check replication information:
+
+javascript
+
+```javascript
+rs.printSecondaryReplicationInfo()
+```
+
+Check primary and secondary replication lag:
+
+javascript
+
+```javascript
+const s = rs.status()
+
+const p = s.members.find(m => m.stateStr === "PRIMARY")
+
+s.members
+  .filter(m => m.stateStr === "SECONDARY")
+  .forEach(m => {
+    printjson({
+      secondary: m.name,
+      replicationLagSeconds:
+        (p.optimeDate - m.optimeDate) / 1000
+    })
+  })
+```
+
+Expected output (example):
+
+javascript
+
+```javascript
+{
+  secondary: 'localhost:27017',
+  replicationLagSeconds: 0
+}
+{
+  secondary: 'localhost:27019',
+  replicationLagSeconds: 0
+}
+```
+
